@@ -37,7 +37,10 @@ back light    (LED, pin 8) not connected
 #include "msoe_lib_clk.h"
 #include "msoe_lib_lcd.h"
 
-	/**
+#define INT_ADC14_BIT (1 << 24)
+#define PWM_PER 46903 // TOP value for timer at 4 Hz
+
+/**
  * @brief Initialize GPIOs
  *
  * Set unused pins to pullup/down enabled to avoid floating inputs,
@@ -45,70 +48,6 @@ back light    (LED, pin 8) not connected
  * initialize port 1.0 GPIO OUT for led
  *
  */
-void init_gpio(void);
-
-/**
- * @brief Initialize analog-to-digital converter (ADC)
- *
- */
-void init_adc(void);
-
-/**
- * @brief Initialize pulse-width modulation (PWM)
- *
- */
-void init_pwm(void);
-
-/**
- * @brief Initialize the LCD
- *
- */
-void init_lcd(void);
-
-/**
- * @brief Clears the specified row
- *
- * @param row - the index of the row to clear
- */
-void LCD_clear_row(uint8_t row);
-
-// Global variables
-bool pushbutton_is_pressed = false;
-uint8_t adc_reading = 0;
-uint8_t pwm_duty_cycle = 0;
-
-int main(void)
-{
-	WDT_A->CTL = WDTCTL = WDTPW | WDTHOLD;; // stop watchdog timer
-	Clock_Init_48MHz();							// run system at 48MHz (default is 3MHz)
-
-	// setup
-	// TODO enable global interrupts
-	init_gpio();
-	init_adc();
-	init_pwm();
-	init_lcd();
-
-	LCD_print_str("ADC reading:");
-	LCD_goto_xy(2, 0);
-	LCD_print_str("Duty Cycle: ");
-	while (1)
-	{
-		if (pushbutton_is_pressed)
-		{
-			LCD_clear_row(1);
-			LCD_goto_xy(1, 2);
-			LCD_print_dec3(adc_reading);
-
-			LCD_clear_row(3);
-			LCD_goto_xy(3, 2);
-			LCD_print_dec3(pwm_duty_cycle);
-			LCD_goto_xy(3, pwm_duty_cycle < 10 ? 3 : 4);
-			LCD_print_str("%");
-		}
-	}
-}
-
 void init_gpio(void)
 {
 	// set unused pins to pullup/down enabled to avoid floating inputs
@@ -126,32 +65,172 @@ void init_gpio(void)
 	// P1.1 is pushbutton S1
 	P1->DIR &= ~BIT1; // make input
 	P1->OUT |= BIT1;  // set as pull up
-	// TODO enable pushbutton interrupt
+	P1->IE |= BIT1; // enable interrupt
+	P1->IES |= BIT0; // falling edge
+	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
 
 	// TODO setup ADC input
 
 	// TODO setup a timer
 
 	// TODO init PWM output
+	// set pin 2.5 to TimA0
+	P2->SEL0 |= BIT5;
+	P2->SEL1 &= ~BIT5;
+	P2->DIR |= BIT5; // set pin 2.5 to output mode
 }
 
+/**
+ * @brief Initialize analog-to-digital converter (ADC)
+ *
+ */
 void init_adc(void)
 {
-	// TODO
+	// Sampling time, S&H=96, ADC14 on, SMCLK, single input, repeated conv.
+	ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_SHP | ADC14_CTL0_SSEL_4 | ADC14_CTL0_ON
+				   | ADC14_CTL0_CONSEQ_2 | ADC14_CTL0_MSC;
+	ADC14->CTL1 |= ADC14_CTL1_RES_1;				// 10-bit conversion
+	ADC14->CTL1 &= ~ADC14_CTL1_RES_2;				// 10-bit conversion
+	ADC14->CTL1 |= (4 << ADC14_CTL1_CSTARTADD_OFS); // use MEM[4]
+	ADC14->MCTL[4] |= ADC14_MCTLN_INCH_6;			// input on A6
+	ADC14->IER0 |= ADC14_IER0_IE4;					// enable interrupt
+	ADC14->CTL0 |= ADC14_CTL0_ENC | ADC14_CTL0_SC;	// enable and start first
+
+	NVIC->ISER[0] |= INT_ADC14_BIT; // enable ADC interrupt in NVIC
 }
 
+/**
+ * @brief Initialize pulse-width modulation (PWM)
+ *
+ */
+void init_pwm(void)
+{
+	// use SMCLK, UP mode, interrupt enabled, prescale 8 x 8 = 64
+	TIMER_A0->CTL |= TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_MC__UP |
+					 TIMER_A_CTL_CLR | TIMER_A_CTL_IE | TIMER_A_CTL_ID__8;
+	TIMER_A0->CCTL[2] |= TIMER_A_CCTLN_OUTMOD_7; // Reset/set output mode
+	TIMER_A0->CCR[0] = PWM_PER;
+	// initial duty cycle of 60%
+	TIMER_A0->CCR[2] = (PWM_PER * 60) / 100; // Note: multiply first to avoid int math error
+	TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8;	 // factor of 8
+	P2->SEL0 |= BIT5;						 // give timer control
+	P2->DIR |= BIT5;						 // make output
+	NVIC->ISER[0] |= (1 << 9);				 // enable TA0_N interrupt
+	P4->DIR |= BIT0;						 // P4.0 will be toggled by 'hand' in TA0 interrupt
+	P4->OUT &= ~BIT0;
+}
+
+/**
+ * @brief Initialize the LCD
+ *
+ */
 void init_lcd(void)
 {
 	LCD_Config();
 	LCD_clear();
 	LCD_home();
 	LCD_contrast(10);
-
-	LCD_print_str("EE4930");
 }
 
+/**
+ * @brief Clears the specified row
+ *
+ * @param row - the index of the row to clear
+ */
 void LCD_clear_row(uint8_t row)
 {
-	LCD_goto_xy(row, 0);
+	LCD_goto_xy(0, row);
 	LCD_print_str("            ");
+}
+
+/**
+ * @brief Pushbutton interrupt handler
+ *
+ */
+void PORT1_IRQHandler(void)
+{
+	uint16_t dummy = P1->IV; // clear flag
+	pushbutton_is_pressed = true;
+}
+
+/**
+ * @brief PWM timer interrupt handler
+ */
+void TA0_N_IRQHandler(void)
+{
+    uint16_t dummy = TIMER_A0->IV; // clear flag
+}
+
+/**
+ * @brief Periodic timer interrupt
+ *
+ * Triggers ADC conversion
+ *
+ */
+void TA1_N_IRQHandler(void)
+{
+	uint16_t dummy = TIMER_A1->IV; // clear flag
+	ADC14->CTL0 |= 1; // start a new ADC conversion
+}
+
+/**
+ * @brief ADC interrupt handler
+ *
+ * Reads the value and updates the duty cycle
+ *
+ */
+void ADC14_IRQHandler(void)
+{
+	adc_reading = ADC14->MEM[4];
+	pwm_duty_cycle = 100 - (uint8_t) ((((float)adc_reading) / ADC_RANGE) * 100);
+	TIMER_A0->CCR[2] = (PWM_PER * (pwm_duty_cycle)) / 100; // invert duty cycle for output
+}
+
+// Global variables
+bool pushbutton_is_pressed = false;
+uint8_t adc_reading = 0;
+uint8_t pwm_duty_cycle = 0;
+
+int main(void)
+{
+	WDT_A->CTL = WDTCTL = WDTPW | WDTHOLD;; // stop watchdog timer
+	Clock_Init_48MHz();	// run system at 48MHz (default is 3MHz)
+
+	// setup
+	init_gpio();
+	init_adc();
+	init_pwm();
+	init_lcd();
+
+	__enable_interrupts(); // global interrupt enables
+
+	LCD_print_str("ADC reading:");
+
+	LCD_goto_xy(0, 2);
+	LCD_print_str("Duty Cycle: ");
+
+	uint8_t count = 0;
+	while (1)
+	{
+		if (pushbutton_is_pressed)
+		{
+		    __disable_interrupts(); // entering critical section
+
+			LCD_clear_row(1);
+			LCD_goto_xy(0, 1);
+			LCD_print_dec3(count);
+
+			//LCD_clear_row(3);
+			LCD_goto_xy(0, 3);
+			LCD_print_dec3(count);
+			LCD_goto_xy(pwm_duty_cycle < 10 ? 3 : 4, 3);
+			LCD_print_str("%");
+
+			count++; // TODO remove
+
+			pushbutton_is_pressed = false;
+
+			__enable_interrupts(); // leaving critical section
+		}
+	}
 }
