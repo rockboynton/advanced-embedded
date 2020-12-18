@@ -33,12 +33,21 @@ back light    (LED, pin 8) not connected
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include "msp.h"
 #include "msoe_lib_clk.h"
 #include "msoe_lib_lcd.h"
 
+// Defines
 #define INT_ADC14_BIT (1 << 24)
 #define PWM_PER 46903 // TOP value for timer at 4 Hz
+#define ADC_RANGE 256 // range of a 8-bit adc
+#define TEN_HZ_PSC 65534 //18750
+
+// Global variables
+bool pushbutton_is_pressed = false;
+uint8_t adc_reading = 0;
+uint8_t pwm_duty_cycle = 0;
 
 /**
  * @brief Initialize GPIOs
@@ -78,6 +87,16 @@ void init_gpio(void)
 	P2->SEL0 |= BIT5;
 	P2->SEL1 &= ~BIT5;
 	P2->DIR |= BIT5; // set pin 2.5 to output mode
+
+	P4->SEL1 |= BIT7;  // give A/D control of pin - A6
+	P4->SEL0 |= BIT7;
+	P4->DIR |= BIT0;  // P4.0 will be toggled by 'hand' in TA0 interrupt
+	P4->OUT &= ~BIT0;
+
+	// TODO remove
+	// P1.0 is LED1
+	P1->DIR |=  BIT0; // make output
+	P1->OUT &= ~BIT0; // set as pull down
 }
 
 /**
@@ -86,11 +105,10 @@ void init_gpio(void)
  */
 void init_adc(void)
 {
-	// Sampling time, S&H=96, ADC14 on, SMCLK, single input, repeated conv.
+	// Sampling time, S&H=96, ADC14 on, SMCLK, single input, single conv.
 	ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_SHP | ADC14_CTL0_SSEL_4 | ADC14_CTL0_ON
 				   | ADC14_CTL0_CONSEQ_2 | ADC14_CTL0_MSC;
-	ADC14->CTL1 |= ADC14_CTL1_RES_1;				// 10-bit conversion
-	ADC14->CTL1 &= ~ADC14_CTL1_RES_2;				// 10-bit conversion
+	ADC14->CTL1 &= ~(ADC14_CTL1_RES_2 | ADC14_CTL1_RES_1); // 8-bit conversion
 	ADC14->CTL1 |= (4 << ADC14_CTL1_CSTARTADD_OFS); // use MEM[4]
 	ADC14->MCTL[4] |= ADC14_MCTLN_INCH_6;			// input on A6
 	ADC14->IER0 |= ADC14_IER0_IE4;					// enable interrupt
@@ -116,8 +134,21 @@ void init_pwm(void)
 	P2->SEL0 |= BIT5;						 // give timer control
 	P2->DIR |= BIT5;						 // make output
 	NVIC->ISER[0] |= (1 << 9);				 // enable TA0_N interrupt
-	P4->DIR |= BIT0;						 // P4.0 will be toggled by 'hand' in TA0 interrupt
-	P4->OUT &= ~BIT0;
+}
+
+/**
+ * @brief initialize timer for periodic interrupts
+ *
+ * Triggers the ADC to start a conversion
+ */
+void init_periodic_timer(void)
+{
+    // Configure TimA1 to SMCLOCK (12 MHz using 48MHz system clock), divide by 8,  UP mode, Interrupt Enable
+    TIMER_A1->CTL |= TIMER_A_CTL_TASSEL_2 | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC_1 | TIMER_A_CTL_IE;
+    TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8;// divide by 8 again, giving a timer freq of 187.5KHz
+    TIMER_A1->CCR[0] = TEN_HZ_PSC;  // set frequency as 10 Hz
+    TIMER_A1->CTL |= TIMER_A_CTL_CLR; // start fresh
+    NVIC->ISER[0] |= BITB;  // enable TA1_N interrupt
 }
 
 /**
@@ -171,6 +202,7 @@ void TA1_N_IRQHandler(void)
 {
 	uint16_t dummy = TIMER_A1->IV; // clear flag
 	ADC14->CTL0 |= 1; // start a new ADC conversion
+    P1->OUT ^= BIT0; // led on
 }
 
 /**
@@ -181,25 +213,22 @@ void TA1_N_IRQHandler(void)
  */
 void ADC14_IRQHandler(void)
 {
+    printf("interrupt\n");
 	adc_reading = ADC14->MEM[4];
 	pwm_duty_cycle = 100 - (uint8_t) ((((float)adc_reading) / ADC_RANGE) * 100);
 	TIMER_A0->CCR[2] = (PWM_PER * (pwm_duty_cycle)) / 100; // invert duty cycle for output
 }
 
-// Global variables
-bool pushbutton_is_pressed = false;
-uint8_t adc_reading = 0;
-uint8_t pwm_duty_cycle = 0;
-
 int main(void)
 {
 	WDT_A->CTL = WDTCTL = WDTPW | WDTHOLD;; // stop watchdog timer
-	Clock_Init_48MHz();	// run system at 48MHz (default is 3MHz)
+	//Clock_Init_48MHz();	// run system at 48MHz (default is 3MHz)
 
 	// setup
 	init_gpio();
 	init_adc();
 	init_pwm();
+	init_periodic_timer();
 	init_lcd();
 
 	__enable_interrupts(); // global interrupt enables
@@ -214,15 +243,23 @@ int main(void)
 	{
 		if (pushbutton_is_pressed)
 		{
+		    P1->OUT |= BIT0; // led on
+		    printf("TimerA0: %d\n", TIMER_A0->R);
+		    printf("TimerA1: %d\n", TIMER_A1->R);
+
+
 		    __disable_interrupts(); // entering critical section
 
 			LCD_clear_row(1);
 			LCD_goto_xy(0, 1);
-			LCD_print_dec3(count);
+			//LCD_print_dec3(adc_reading);
+			LCD_print_dec3(count); // TODO remove
 
-			//LCD_clear_row(3);
+			LCD_clear_row(3);
 			LCD_goto_xy(0, 3);
-			LCD_print_dec3(count);
+
+			//LCD_print_dec3(pwm_duty_cycle);
+			LCD_print_dec3(count); // TODO remove
 			LCD_goto_xy(pwm_duty_cycle < 10 ? 3 : 4, 3);
 			LCD_print_str("%");
 
@@ -232,5 +269,6 @@ int main(void)
 
 			__enable_interrupts(); // leaving critical section
 		}
+        P1->OUT &= ~BIT0; // turn led off
 	}
 }
