@@ -33,7 +33,9 @@ Specifications:
   * ‘single-channel single-conversion’ mode
   * 8-bit resolution.
   * A timer and its interrupt to periodically initiate a new A/D conversion.
-    * The period used was **TODO PERIOD USED AND WHY**
+    * The period used was **10Hz, because it allows for fast enough conversions
+      to seem almost real time to a human, but efficient for the
+      microcontroller**
   * A/D interrupt to handle getting the new conversion value when it is done.
 
 * A/D reading is treated as a percentage. A timer generates a PWM signal with a

@@ -42,7 +42,7 @@ back light    (LED, pin 8) not connected
 #define INT_ADC14_BIT (1 << 24)
 #define PWM_PER 46903 // TOP value for timer at 4 Hz
 #define ADC_RANGE 256 // range of a 8-bit adc
-#define TEN_HZ_PSC 65534 //18750
+#define TEN_HZ_PSC (uint16_t) 18750
 
 // Global variables
 bool pushbutton_is_pressed = false;
@@ -145,7 +145,7 @@ void init_periodic_timer(void)
 {
     // Configure TimA1 to SMCLOCK (12 MHz using 48MHz system clock), divide by 8,  UP mode, Interrupt Enable
     TIMER_A1->CTL |= TIMER_A_CTL_TASSEL_2 | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC_1 | TIMER_A_CTL_IE;
-    TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8;// divide by 8 again, giving a timer freq of 187.5KHz
+    TIMER_A1->EX0 |= TIMER_A_EX0_IDEX__8; // divide by 8 again, giving a timer freq of 187.5KHz
     TIMER_A1->CCR[0] = TEN_HZ_PSC;  // set frequency as 10 Hz
     TIMER_A1->CTL |= TIMER_A_CTL_CLR; // start fresh
     NVIC->ISER[0] |= BITB;  // enable TA1_N interrupt
@@ -213,7 +213,6 @@ void TA1_N_IRQHandler(void)
  */
 void ADC14_IRQHandler(void)
 {
-    printf("interrupt\n");
 	adc_reading = ADC14->MEM[4];
 	pwm_duty_cycle = 100 - (uint8_t) ((((float)adc_reading) / ADC_RANGE) * 100);
 	TIMER_A0->CCR[2] = (PWM_PER * (pwm_duty_cycle)) / 100; // invert duty cycle for output
@@ -221,8 +220,8 @@ void ADC14_IRQHandler(void)
 
 int main(void)
 {
-	WDT_A->CTL = WDTCTL = WDTPW | WDTHOLD;; // stop watchdog timer
-	//Clock_Init_48MHz();	// run system at 48MHz (default is 3MHz)
+	WDTCTL = WDTPW | WDTHOLD;; // stop watchdog timer
+	Clock_Init_48MHz();	// run system at 48MHz (default is 3MHz)
 
 	// setup
 	init_gpio();
@@ -268,7 +267,7 @@ int main(void)
 			pushbutton_is_pressed = false;
 
 			__enable_interrupts(); // leaving critical section
+            P1->OUT &= ~BIT0; // turn led off
 		}
-        P1->OUT &= ~BIT0; // turn led off
 	}
 }
