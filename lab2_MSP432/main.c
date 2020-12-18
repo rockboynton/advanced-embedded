@@ -2,18 +2,19 @@
 MSP432 main.c
 
 Rock Boynton
-12/07/2020
+12/17/2020
 EE4930 Lab 1
 
-// TODO description
- *
- *
+Description:
+    Reads from a potentiometer with an ADC on SW1 press. Outputs a PWM signal
+    on P2.5 with duty cycle inverted to ADC reading. ADC reading is
+    periodically taken using another timer.
 
 *********   Bourns 3352T-1-103LF-10K potentiometer reference   ***************
 Signal (Bourns 3352T)  LaunchPad pin
 GND    (CCW,   pin 1)  ground
-Wiper  (Wiper, pin 2)  power
-VCC    (CW,    pin 3)  connected to P4.7
+Wiper  (Wiper, pin 2)  connected to P4.7
+VCC    (CW,    pin 3)  power
 
 *********   Nokia LCD interface reference   **********************************
 
@@ -33,17 +34,15 @@ back light    (LED, pin 8) not connected
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include "msp.h"
 #include "msoe_lib_clk.h"
 #include "msoe_lib_lcd.h"
-#include "msoe_lib_delay.h"
 
 // Defines
 #define INT_ADC14_BIT (1 << 24)
 #define PWM_PER 46903 // TOP value for timer at 4 Hz
 #define ADC_RANGE 256 // range of a 8-bit adc
-#define TEN_HZ_PSC (uint16_t) 18750
+#define TEN_HZ_PSC 18750
 
 // Global variables
 bool pushbutton_is_pressed = false;
@@ -54,8 +53,7 @@ uint8_t pwm_duty_cycle = 0;
  * @brief Initialize GPIOs
  *
  * Set unused pins to pullup/down enabled to avoid floating inputs,
- * initialize port P1.1 GPIO IN for pushbutton, and
- * initialize port 1.0 GPIO OUT for led
+ * initialize port P1.1 GPIO IN for pushbutton, enable interrupts
  *
  */
 void init_gpio(void)
@@ -78,26 +76,6 @@ void init_gpio(void)
 	P1->IE |= BIT1; // enable interrupt
 	P1->IES |= BIT0; // falling edge
 	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
-
-	// TODO setup ADC input
-
-	// TODO setup a timer
-
-	// TODO init PWM output
-	// set pin 2.5 to TimA0
-	P2->SEL0 |= BIT5;
-	P2->SEL1 &= ~BIT5;
-	P2->DIR |= BIT5; // set pin 2.5 to output mode
-
-	P4->SEL1 |= BIT7;  // give A/D control of pin - A6
-	P4->SEL0 |= BIT7;
-	P4->DIR |= BIT0;  // P4.0 will be toggled by 'hand' in TA0 interrupt
-	P4->OUT &= ~BIT0;
-
-	// TODO remove
-	// P1.0 is LED1
-	P1->DIR |=  BIT0; // make output
-	P1->OUT &= ~BIT0; // set as pull down
 }
 
 /**
@@ -113,8 +91,10 @@ void init_adc(void)
 	ADC14->MCTL[4] |= ADC14_MCTLN_INCH_6;			// input on A6
 	ADC14->IER0 |= ADC14_IER0_IE4;					// enable interrupt
 	ADC14->CTL0 |= ADC14_CTL0_ENC;
-
 	NVIC->ISER[0] |= INT_ADC14_BIT; // enable ADC interrupt in NVIC
+
+    P4->SEL1 |= BIT7;  // give A/D control of pin - A6
+    P4->SEL0 |= BIT7;
 }
 
 /**
@@ -127,12 +107,14 @@ void init_pwm(void)
 	TIMER_A0->CTL |= TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_MC__UP |
 					 TIMER_A_CTL_CLR | TIMER_A_CTL_IE | TIMER_A_CTL_ID__8;
 	TIMER_A0->CCTL[2] |= TIMER_A_CCTLN_OUTMOD_7; // Reset/set output mode
-	TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8;	 // factor of 8
-	P2->SEL0 |= BIT5;						 // give timer control
-	P2->DIR |= BIT5;						 // make output
-	NVIC->ISER[0] |= BIT9;				 // enable TA0_N interrupt
-	P4->DIR |= BIT0;					 // P4.0 will be toggled by 'hand' in TA0 interrupt
-	P4->OUT &= ~BIT0;
+	TIMER_A0->CCR[0] = PWM_PER;
+	TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8; // factor of 8
+	NVIC->ISER[0] |= BIT9; // enable TA0_N interrupt
+
+	P2->SEL0 |= BIT5; // give timer control of pin 2.5
+	P2->SEL1 &= ~BIT5;
+	P2->DIR |= BIT5; // make output
+
 }
 
 /**
@@ -163,17 +145,6 @@ void init_lcd(void)
 }
 
 /**
- * @brief Clears the specified row
- *
- * @param row - the index of the row to clear
- */
-void LCD_clear_row(uint8_t row)
-{
-	LCD_goto_xy(0, row);
-	LCD_print_str("            ");
-}
-
-/**
  * @brief Pushbutton interrupt handler
  *
  */
@@ -201,7 +172,6 @@ void TA1_N_IRQHandler(void)
 {
 	uint16_t dummy = TIMER_A1->IV; // clear flag
 	ADC14->CTL0 |= ADC14_CTL0_SC; // start a new ADC conversion
-    P1->OUT ^= BIT0; // led on
 }
 
 /**
@@ -213,8 +183,8 @@ void TA1_N_IRQHandler(void)
 void ADC14_IRQHandler(void)
 {
 	adc_reading = ADC14->MEM[4];
-	pwm_duty_cycle = 100 - (uint8_t) ((((float) adc_reading) / ADC_RANGE) / 100); // multiply first to avoid int math error
-	TIMER_A0->CCR[2] = (PWM_PER * pwm_duty_cycle) / 100; // invert duty cycle for output
+	pwm_duty_cycle = 100 - ((((float) adc_reading) / ADC_RANGE) * 100);
+	TIMER_A0->CCR[2] = (PWM_PER * pwm_duty_cycle) / 100;
 }
 
 int main(void)
@@ -229,57 +199,31 @@ int main(void)
 	init_periodic_timer();
 	init_lcd();
 
-	__enable_interrupts(); // global interrupt enables
+	__enable_interrupts(); // global interrupt enable
 
 	LCD_print_str("ADC reading:");
 
 	LCD_goto_xy(0, 2);
 	LCD_print_str("Duty Cycle: ");
 
-	uint8_t count = 0;
+	LCD_goto_xy(4, 3);
+	LCD_print_str("%");
+
 	while (1)
 	{
 		if (pushbutton_is_pressed)
 		{
-		    LCD_clear();
-		    LCD_home();
-		    LCD_print_str("ADC reading:");
-		    LCD_goto_xy(0, 1);
-		    LCD_print_dec5(adc_reading);
-		    LCD_goto_xy(0, 2);
-		    LCD_print_str("Duty Cycle: ");
-		    LCD_print_dec5(pwm_duty_cycle);
-		    LCD_goto_xy(pwm_duty_cycle < 10 ? 3 : 4, 3);
-		    LCD_print_str("%");
-		    pushbutton_is_pressed = false;
+		    __disable_interrupts(); // entering critical section
 
-//		    //P1->OUT |= BIT0; // led on
-////		    printf("TimerA0: %d\n", TIMER_A0->R);
-////		    printf("TimerA1: %d\n", TIMER_A1->R);
-//
-//
-//
-//		    //__disable_interrupts(); // entering critical section
-//
-//			LCD_clear_row(1);
-//			LCD_goto_xy(0, 1);
-//			LCD_print_dec3(adc_reading);
-//			// LCD_print_dec3(count); // TODO remove
-//
-//			LCD_clear_row(3);
-//			LCD_goto_xy(0, 3);
-//
-//			LCD_print_dec3(pwm_duty_cycle);
-//			// LCD_print_dec3(count); // TODO remove
-//			LCD_goto_xy(pwm_duty_cycle < 10 ? 3 : 4, 3);
-//			LCD_print_str("%");
-//
-//			count++; // TODO remove
-//
-//			pushbutton_is_pressed = false;
-//
-//			//__enable_interrupts(); // leaving critical section
-//            //P1->OUT &= ~BIT0; // turn led off
+			LCD_goto_xy(1, 1);
+			LCD_print_udec3(adc_reading);
+
+			LCD_goto_xy(1, 3);
+			LCD_print_udec3(pwm_duty_cycle);
+
+			pushbutton_is_pressed = false;
+
+			__enable_interrupts(); // leaving critical section
 		}
 	}
 }
