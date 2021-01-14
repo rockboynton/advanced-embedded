@@ -1,0 +1,7 @@
+**/Debug/
+*.map
+*.out
+*.xml
+*.obj
+.vscode/
+*.pdf
