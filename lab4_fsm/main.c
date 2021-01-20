@@ -41,7 +41,6 @@ back light    (LED, pin 8) not connected
 
 // Defines
 #define INT_ADC14_BIT (1 << 24)
-#define PWM_PER 46903 // TOP value for timer at 4 Hz
 #define ADC_RANGE 256 // range of a 8-bit adc
 #define TEN_HZ_PSC 18750
 
@@ -53,26 +52,14 @@ typedef struct Input
     bool changed;
 } Input;
 
-Input temp = {0, 6, 0, false};
-Input humidity = {0, 10, 1, false};
-Input humidity_setpoint = {0, 10, 2, false};
-Input ice_sensed = {0, 9, 3, false};
-
-// global inputs
-// uint8_t temperature;
-// uint8_t humidity;
-// uint8_t humidity_setpoint;
-// bool ice_sensed;
+Input temp = {0, 9, 0, false};
+Input humidity_setpoint = {0, 9, 2, false};
+Input humidity = {0, 9, 1, false};
+Input ice_sensed = {0, 11, 3, false};
 
 // global outputs
 bool fan_on;
 bool compressor_on;
-
-// global flags
-// bool humidity_changed;
-// bool temperature_changed;
-// bool setpoint_changed;
-// bool defrost_changed;
 
 /**
  * @brief Initialize the LCD
@@ -123,6 +110,59 @@ void update_display(Input *input)
     }
 }
 
+/**
+ * @brief Initialize analog-to-digital converters (ADC)
+ *
+ * Initializes the temperature (P4.7) and humidity control (P4.6)
+ *
+ */
+void init_adc(void)
+{
+    P4->SEL0 |= BIT7 | BIT6; // set pins
+    P4->SEL1 |= BIT7 | BIT6;  // set pins
+	// Sampling time, S&H=96, ADC14 on, SMCLK, repeat sequence of channels
+    ADC14->CTL0 &= 0x0;
+	ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_SHT1_5 | ADC14_CTL0_SHP | ADC14_CTL0_SSEL_4 | ADC14_CTL0_ON | ADC14_CTL0_CONSEQ_3;
+    ADC14->CTL1 &= 0xF0000000;
+	ADC14->CTL1 &= ~(ADC14_CTL1_RES_2 | ADC14_CTL1_RES_1); // 8-bit conversion
+	ADC14->CTL1 |= (4 << ADC14_CTL1_CSTARTADD_OFS); // use MEM[4]
+	ADC14->MCTL[4] |= ADC14_MCTLN_INCH_6;			// input on A6 - temperature
+	ADC14->MCTL[5] |= ADC14_MCTLN_INCH_7;           // input on A7 - humidity
+    ADC14->MCTL[5] |= BIT7;  // set EOS
+	ADC14->IER0 |= ADC14_IER0_IE4 | ADC14_IER0_IE5;					// enable interrupts
+	ADC14->CTL0 |= ADC14_CTL0_ENC;
+	NVIC->ISER[0] |= INT_ADC14_BIT; // enable ADC interrupt in NVIC
+	ADC14->CTL0 |= 1; // start
+}
+
+/**
+ * @brief ADC interrupt handler
+ *
+ * Reads the value and updates the temperature
+ *
+ */
+void ADC14_IRQHandler(void)
+{
+    uint32_t irq = ADC14->IFGR0;
+    uint16_t adc_reading;
+    if (irq & BIT4)
+    {
+        adc_reading = ADC14->MEM[4];
+        // put temperature in range of 40 - 110
+        temp.val = (((float) adc_reading) / ADC_RANGE) * (111 - 40) + 40;
+        ADC14->CLRIFGR0 |= BIT4; // clear irq flag
+        temp.changed = true;
+    }
+    else if (irq & BIT5)
+    {
+        adc_reading = ADC14->MEM[5];
+        // put humidity in range of 0 - 100
+        humidity.val = (((float) adc_reading) / ADC_RANGE) * 101;
+        ADC14->CLRIFGR0 |= BIT5; // clear irq flag
+        humidity.changed = true;
+    }
+    ADC14->CLRIFGR0 |= 0xFFFFFFFF; // precaution
+}
 
 void main(void)
 {
@@ -131,7 +171,7 @@ void main(void)
 
     // setup
 	init_gpio();
-//	init_adc();
+	init_adc();
 //	init_pwm();
 //	init_periodic_timer();
 	init_lcd();
@@ -154,14 +194,15 @@ void main(void)
 
     while (1)
 	{
-        __disable_interrupts(); // entering critical section
+//        __disable_interrupts(); // entering critical section
         update_display(&temp);
         update_display(&humidity);
         update_display(&humidity_setpoint);
         update_display(&ice_sensed);
-        __enable_interrupts(); // leaving critical section
+//        __enable_interrupts(); // leaving critical section
 
 		// read inputs
+        ADC14->CTL0 |= 1; // start adc conversions
 	    if (!ice_sensed.val && humidity.val >= humidity_setpoint.val + 5) {
             input_event = HUMIDITY_RISE;
         } else if (!ice_sensed.val && humidity.val >= humidity_setpoint.val + 5) {
