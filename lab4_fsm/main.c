@@ -43,6 +43,7 @@ back light    (LED, pin 8) not connected
 #define INT_ADC14_BIT (1 << 24)
 #define ADC_RANGE 256 // range of a 8-bit adc
 #define TEN_HZ_PSC 18750
+#define HUMIDITY_SETPOINT_DEFAULT 50
 
 typedef struct Input
 {
@@ -53,8 +54,8 @@ typedef struct Input
 } Input;
 
 Input temp = {0, 9, 0, false};
-Input humidity_setpoint = {0, 9, 2, false};
 Input humidity = {0, 9, 1, false};
+Input humidity_setpoint = {0, 9, 2, false};
 Input ice_sensed = {0, 11, 3, false};
 
 // global outputs
@@ -94,9 +95,19 @@ void init_gpio(void)
     P9->REN |= 0xFF;
     P10->REN |= 0xFF;
 
-    // pin P5.0
-    P5->DIR |= BIT0;   // configure as output
-    P5->OUT &= ~BIT0;  // set output low to start
+    // P1.1 is pushbutton S1
+	P1->DIR &= ~BIT1; // make input
+	P1->OUT |= BIT1;  // set as pull up
+	P1->IE |= BIT1; // enable interrupt
+	P1->IES |= BIT0; // falling edge
+
+    // P1.4 is pushbutton S2
+	P1->DIR &= ~BIT4; // make input
+	P1->OUT |= BIT4;  // set as pull up
+	P1->IE |= BIT4; // enable interrupt
+	P1->IES |= BIT0; // falling edge
+
+	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
 }
 
 void update_display(Input *input)
@@ -133,6 +144,21 @@ void init_adc(void)
 	ADC14->CTL0 |= ADC14_CTL0_ENC;
 	NVIC->ISER[0] |= INT_ADC14_BIT; // enable ADC interrupt in NVIC
 	ADC14->CTL0 |= 1; // start
+}
+
+/**
+ * @brief Pushbutton interrupt handler
+ *
+ */
+void PORT1_IRQHandler(void)
+{
+	uint16_t dummy = P1->IV; // clear flag
+    
+    if (humidity_setpoint.val < 100)
+    {
+        humidity_setpoint.val += 5;
+    }
+    humidity_setpoint.changed = true;
 }
 
 /**
@@ -181,16 +207,18 @@ void main(void)
     LCD_print_str("Temp:");
 
 	LCD_goto_xy(0, 1);
-	LCD_print_str("Setpt: ");
+	LCD_print_str("Humidity:");
 
 	LCD_goto_xy(0, 2);
-	LCD_print_str("Humidity:");
+	LCD_print_str("Setpt: ");
 
     LCD_goto_xy(0, 3);
 	LCD_print_str("Defrost:");
 
 	State current_state = OFF; // start in OFF state
 	Event input_event;
+    humidity_setpoint.val = HUMIDITY_SETPOINT_DEFAULT; // default set point
+    humidity_setpoint.changed = true;
 
     while (1)
 	{
