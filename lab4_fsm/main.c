@@ -40,9 +40,7 @@ back light    (LED, pin 8) not connected
 #include "dehumidifier_fsm.h"
 
 // Defines
-#define INT_ADC14_BIT (1 << 24)
 #define ADC_RANGE 256 // range of a 8-bit adc
-#define TEN_HZ_PSC 18750
 #define HUMIDITY_SETPOINT_DEFAULT 50
 #define HUMIDITY_SETPOINT_INC 5
 
@@ -75,6 +73,39 @@ void init_lcd(void)
 	LCD_contrast(10);
 }
 
+void init_inputs(void)
+{
+    // P1.1 is pushbutton S1 -- setpoint + 5
+	P1->DIR &= ~BIT1; // make input
+	P1->OUT |= BIT1;  // set as pull up
+	P1->IE |= BIT1; // enable interrupt
+
+    // P1.4 is pushbutton S2 -- setpoint - 5
+	P1->DIR &= ~BIT4; // make input
+	P1->OUT |= BIT4;  // set as pull up
+	P1->IE |= BIT4; // enable interrupt
+
+    // pin P1.6 -- defrost
+    P1->DIR &= ~BIT6; // make input
+	P1->OUT |= BIT6;  // set as pull up
+	P1->IE |= BIT6; // enable interrupt
+
+	P1->IES |= BIT0; // falling edge
+
+	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
+}
+
+void init_outputs(void)
+{
+    // pin P5.0 -- fan
+    P5->DIR |= BIT0;   // configure as output
+    P5->OUT &= ~BIT0;  // set output low to start
+
+    // pin P5.2 -- conpressor
+    P5->DIR |= BIT2;   // configure as output
+    P5->OUT &= ~BIT2;  // set output low to start
+}
+
 /**
  * @brief Initialize GPIOs
  *
@@ -96,19 +127,8 @@ void init_gpio(void)
     P9->REN |= 0xFF;
     P10->REN |= 0xFF;
 
-    // P1.1 is pushbutton S1
-	P1->DIR &= ~BIT1; // make input
-	P1->OUT |= BIT1;  // set as pull up
-	P1->IE |= BIT1; // enable interrupt
-	P1->IES |= BIT0; // falling edge
-
-    // P1.4 is pushbutton S2
-	P1->DIR &= ~BIT4; // make input
-	P1->OUT |= BIT4;  // set as pull up
-	P1->IE |= BIT4; // enable interrupt
-	P1->IES |= BIT0; // falling edge
-
-	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
+    init_inputs();
+    init_outputs();
 }
 
 void update_display(Input *input)
@@ -116,7 +136,10 @@ void update_display(Input *input)
     if (input->changed)
     {
         LCD_goto_xy(input->lcd_x, input->lcd_y);
-        LCD_print_udec3(input->val);
+        if (input->lcd_y == 3) // defrost
+            LCD_print_str(input->val ? "Y" : "N");
+        else
+            LCD_print_udec3(input->val);
 
         input->changed = false;
     }
@@ -143,7 +166,7 @@ void init_adc(void)
     ADC14->MCTL[5] |= BIT7;  // set EOS
 	ADC14->IER0 |= ADC14_IER0_IE4 | ADC14_IER0_IE5;					// enable interrupts
 	ADC14->CTL0 |= ADC14_CTL0_ENC;
-	NVIC->ISER[0] |= INT_ADC14_BIT; // enable ADC interrupt in NVIC
+	NVIC->ISER[0] |= ADC14_IER0_IE24; // enable ADC interrupt in NVIC
 	ADC14->CTL0 |= 1; // start
 }
 
@@ -155,17 +178,26 @@ void init_adc(void)
  */
 void PORT1_IRQHandler(void)
 {
-	uint16_t interrupt_flags = P1->IV; // clear flag
-    
+	uint16_t interrupt_flags = P1->IFG; // clear flag
+    uint16_t dummy = P1->IV; // clear flag
+	printf("In P1 interrupt \n");
+
     if (interrupt_flags & DIO_PORT_IV__IFG1 && humidity_setpoint.val < 100)
     { // P1.1 (S1) - raise humidity setpoint
         humidity_setpoint.val += HUMIDITY_SETPOINT_INC;
+        humidity_setpoint.changed = true;
     }
     else if (interrupt_flags & DIO_PORT_IV__IFG4 && humidity_setpoint.val > 0)
     { // P1.4 (S2) - lower humidity setpoint
         humidity_setpoint.val -= HUMIDITY_SETPOINT_INC;
+        humidity_setpoint.changed = true;
     }
-    humidity_setpoint.changed = true;
+    else if (interrupt_flags & DIO_PORT_IV__IFG6)
+    { // P1.6 - Defrost jumper
+        printf("In P1.6 interrupt \n");
+        ice_sensed.val = P1->IN & BIT6;
+        ice_sensed.changed = true;
+    }
 }
 
 /**
@@ -199,14 +231,13 @@ void ADC14_IRQHandler(void)
 
 void main(void)
 {
+
 	WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;		// stop watchdog timer
     Clock_Init_48MHz(); // run system at 48MHz (default is 3MHz)
 
     // setup
 	init_gpio();
 	init_adc();
-//	init_pwm();
-//	init_periodic_timer();
 	init_lcd();
 
 	__enable_interrupts(); // global interrupt enable
@@ -229,7 +260,10 @@ void main(void)
 
     while (1)
 	{
-//        __disable_interrupts(); // entering critical section
+        P5->OUT |= BIT0; // set
+        P5->OUT |= BIT2; // set
+//        printf("ice sensed?: %d\n", P1->IN & BIT6);
+        //        __disable_interrupts(); // entering critical section
         update_display(&temp);
         update_display(&humidity);
         update_display(&humidity_setpoint);
