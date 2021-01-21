@@ -44,6 +44,7 @@ back light    (LED, pin 8) not connected
 #define ADC_RANGE 256 // range of a 8-bit adc
 #define TEN_HZ_PSC 18750
 #define HUMIDITY_SETPOINT_DEFAULT 50
+#define HUMIDITY_SETPOINT_INC 5
 
 typedef struct Input
 {
@@ -149,14 +150,20 @@ void init_adc(void)
 /**
  * @brief Pushbutton interrupt handler
  *
+ *
+ *
  */
 void PORT1_IRQHandler(void)
 {
-	uint16_t dummy = P1->IV; // clear flag
+	uint16_t interrupt_flags = P1->IV; // clear flag
     
-    if (humidity_setpoint.val < 100)
-    {
-        humidity_setpoint.val += 5;
+    if (interrupt_flags & DIO_PORT_IV__IFG1 && humidity_setpoint.val < 100)
+    { // P1.1 (S1) - raise humidity setpoint
+        humidity_setpoint.val += HUMIDITY_SETPOINT_INC;
+    }
+    else if (interrupt_flags & DIO_PORT_IV__IFG4 && humidity_setpoint.val > 0)
+    { // P1.4 (S2) - lower humidity setpoint
+        humidity_setpoint.val -= HUMIDITY_SETPOINT_INC;
     }
     humidity_setpoint.changed = true;
 }
@@ -169,9 +176,9 @@ void PORT1_IRQHandler(void)
  */
 void ADC14_IRQHandler(void)
 {
-    uint32_t irq = ADC14->IFGR0;
+    uint32_t interrupt_flags = ADC14->IFGR0;
     uint16_t adc_reading;
-    if (irq & BIT4)
+    if (interrupt_flags & BIT4)
     {
         adc_reading = ADC14->MEM[4];
         // put temperature in range of 40 - 110
@@ -179,7 +186,7 @@ void ADC14_IRQHandler(void)
         ADC14->CLRIFGR0 |= BIT4; // clear irq flag
         temp.changed = true;
     }
-    else if (irq & BIT5)
+    else if (interrupt_flags & BIT5)
     {
         adc_reading = ADC14->MEM[5];
         // put humidity in range of 0 - 100
