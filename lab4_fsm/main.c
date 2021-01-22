@@ -90,7 +90,7 @@ void init_inputs(void)
 	P1->OUT |= BIT6;  // set as pull up
 	P1->IE |= BIT6; // enable interrupt
 
-	P1->IES |= BIT0; // falling edge
+	P1->IES |= BIT1 | BIT4 | BIT6; // falling edge
 
 	NVIC->ISER[1] |= BIT3; // enable interrupt in NVIC
 }
@@ -178,21 +178,20 @@ void init_adc(void)
  */
 void PORT1_IRQHandler(void)
 {
-	uint16_t interrupt_flags = P1->IFG; // clear flag
-    uint16_t dummy = P1->IV; // clear flag
+    uint16_t interrupt_flags = P1->IV; // clear flag
 	printf("In P1 interrupt \n");
 
-    if (interrupt_flags & DIO_PORT_IV__IFG1 && humidity_setpoint.val < 100)
+    if (interrupt_flags == DIO_PORT_IV__IFG1 && humidity_setpoint.val < 100)
     { // P1.1 (S1) - raise humidity setpoint
         humidity_setpoint.val += HUMIDITY_SETPOINT_INC;
         humidity_setpoint.changed = true;
     }
-    else if (interrupt_flags & DIO_PORT_IV__IFG4 && humidity_setpoint.val > 0)
+    else if (interrupt_flags == DIO_PORT_IV__IFG4 && humidity_setpoint.val > 0)
     { // P1.4 (S2) - lower humidity setpoint
         humidity_setpoint.val -= HUMIDITY_SETPOINT_INC;
         humidity_setpoint.changed = true;
     }
-    else if (interrupt_flags & DIO_PORT_IV__IFG6)
+    else if (interrupt_flags == DIO_PORT_IV__IFG6)
     { // P1.6 - Defrost jumper
         printf("In P1.6 interrupt \n");
         ice_sensed.val = P1->IN & BIT6;
