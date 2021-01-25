@@ -1,3 +1,209 @@
+# LAB4 – Humidifier FSM
+
+Rock Boynton
+
+EE 4930/011
+
+01/21/2020
+
+## Objectives
+
+The objective of this lab is to write code implementing a Finite State Machine (FSM) using the
+Look Up Table (LUT) method, which uses function pointers as a mechanism of implementation.
+
+This lab has us implement a more complex system that actually models a real world embedded system.
+
+## Description
+
+This lab implements a FSM as the control for a dehumidifier. A dehumidifier removes moisture from
+the air with a compressor to cool coils which have the moisture collect through condensation. A fan
+blows air through the coils to circulate the air.
+
+Specifications:
+
+* Inputs:
+  * Room temperature – potentiometer (40 – 110 deg. F)
+  * Humidity – potentiometer (0 – 100% RH)
+  * Humidity setpoint – two push button switches (up, down)
+  * Ice sensor – yes/no (switch or jumper)
+* Outputs:
+  * Fan control – ON/OFF
+  * Compressor – ON/OFF
+  * LCD
+    * Temperature
+    * Setpoint
+    * Humidity
+    * Defrost
+* The setpoint adjustment should be in increments of 5% relative humidity
+* If the humidity sensor reading is greater than the setpoint by at least 5, and if the ice sensor does not sense ice, then turn on the fan and compressor. Leave them on until the humidity reading drops below the setpoint by at least 5.
+* If the humidity reading is at least 5 less than the setpoint, and if the ice sensor does not sense ice, turn off the compressor and the fan. Leave them off until the humidity reading goes above the setpoint by at least 5.
+* If the humidity sensor reading is within 5 of the setpoint, then there should be no change in the outputs, i.e., if the reading came into this setpoint band from below, the outputs should remain off, if it came into it from above, the outputs should remain on. (hysteresis)
+* If there is ice, then turn on the fan (but not the compressor) (Defrost mode). When the ice is gone, return to normal operation, but only turn the compressor on if the humidity sensor reading is at least 5 above the setpoint.
+
+## Conclusion
+
+I enjoyed this lab a lot. I felt like I was building something that has a real application which was
+very cool. And we only had two weeks to complete, I wonder how much more time would need to be
+invested for an actual production dehumidifier control unit.
+
+Controlling the potentiometers was something we've done before, but distinguishing between multiple
+interrupts on the same port (withing the same IRQ handler was something new. Similarly, I had to distinguish between multiple interrupts for
+pushbuttons, and I initially had trouble finding the difference between the PxIV and the PxIFG
+register and getting the right interrupt, but eventually got it.
+
+As far as the FSM itself, it's one of my favorite applications of the C language with using function
+pointers and enumerations... I just find it a really elegant solution to a common design problem. I
+actually implementing a locking system in my CE embedded 2 class using this method, so I had a
+little experience with it. It took me a little bit of thinking to design the system appropriately,
+and to my surprise it *almost* worked perfectly the first try.
+
+I say almost because I actually still have an issue when coming out of defrost...it doesn't turn on
+the compressor if the humidity is > setpoint + 5. I am open to hearing why you think that is or what
+I should look for.
+
+## Source Code
+
+```c
+// dehumidifier_fsm.h
+#ifndef DEHUMIDIFIER_FSM_H_
+#define DEHUMIDIFIER_FSM_H_
+
+#include "msp.h"
+
+typedef enum
+{
+	OFF,
+	NORMAL_OPERATION,
+	DEFROST,
+    NUM_STATES
+} State;
+
+typedef enum
+{
+	HUMIDITY_RISE,
+	HUMIDITY_FALL,
+    ICE_SENSED,
+    IDLE,
+    NUM_EVENTS
+} Event;
+
+typedef void (*function_ptr)(void);
+
+typedef struct {
+    State next_state;
+    function_ptr action;
+} state_element;
+
+// function prototypes for state actions
+
+/**
+ * @brief Turn the fan and compressor on
+ *
+ */
+void operate_normally(void);
+
+/**
+ * @brief Turn the fan and compressor off
+ *
+ */
+void turn_off(void);
+
+/**
+ * @brief Turn the fan on and the compressor off
+ *
+ */
+void defrost_coils(void);
+
+/**
+ * @brief Wraps the `__no_operation` for use in the state table
+ *
+ */
+void no_op(void);
+
+//void __no_operation();
+
+// state table array
+extern state_element state_table[NUM_STATES][NUM_EVENTS];
+
+/**
+ * @brief Run the appropriate state's action and return the next state
+ *
+ * @param current_state - current state of the system with action to run
+ * @param input - current input event
+ * @return State - next state
+ */
+State update_state(State current_state, Event input);
+
+#endif // DEHUMIDIFIER_FSM_H_
+
+```
+
+---
+
+```c
+// dehumidifier_fsm.c
+#include "dehumidifier_fsm.h"
+
+/**
+ * @brief Turn the fan and compressor on
+ *
+ */
+void operate_normally(void)
+{
+    P5->OUT |= BIT0;
+    P5->OUT |= BIT2;
+}
+
+/**
+ * @brief Turn the fan and compressor off
+ *
+ */
+void turn_off(void)
+{
+    P5->OUT &= ~BIT0;
+    P5->OUT &= ~BIT2;
+}
+
+/**
+ * @brief Turn the fan on and the compressor off
+ *
+ */
+void defrost_coils(void)
+{
+    P5->OUT |= BIT0;
+    P5->OUT &= ~BIT2;
+}
+
+
+void no_op(void)
+{
+    __no_operation();
+}
+
+// create state table array
+state_element state_table[NUM_STATES][NUM_EVENTS] = {
+    {{NORMAL_OPERATION, operate_normally}, {OFF, no_op}, {DEFROST, defrost_coils}, {OFF, no_op}},
+    {{NORMAL_OPERATION, no_op}, {OFF, turn_off}, {DEFROST, defrost_coils}, {NORMAL_OPERATION, no_op}},
+    {{DEFROST, no_op}, {DEFROST, no_op}, {DEFROST, no_op}, {OFF, turn_off}}
+};
+
+State update_state(State current_state, Event input)
+{
+    state_element current = state_table[current_state][input];
+
+    // run the proper action function
+    (*current.action)();
+
+    // return next state info
+    return current.next_state;
+}
+
+```
+
+---
+
+
+```c
 /*****************************************************************************
 MSP432 main.c
 
@@ -292,3 +498,11 @@ void main(void)
         __enable_interrupts(); // leaving critical section
 	}
 }
+
+```
+
+## Schematic & State Diagram of FSM
+
+![Dehumidifer Schematic](FSM_Schematic.png)
+
+![Dehumidifier State Diagram](Dehumidifer_FSM.png)
