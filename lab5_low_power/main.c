@@ -41,7 +41,8 @@ back light    (LED, pin 8) not connected
 
 // Defines
 #define TWELVE_BIT_ADC_RANGE 4096
-#define TEN_HZ_PSC 18750
+#define TEN_HZ_PSC 65000// 18750
+#define SHORT 5000
 
 typedef struct Input
 {
@@ -70,6 +71,19 @@ void init_lcd(void)
 }
 
 /**
+ * @brief Initialize input pins
+ *
+ * Output pin for  indicating temp reading is available
+ *
+ */
+void init_outputs(void)
+{
+    // pin P4.5
+    P4->DIR |= BIT5;  // configure as output
+    P4->OUT &= ~BIT5; // set output low to start
+}
+
+/**
  * @brief Initialize GPIOs
  *
  * Set unused pins to pullup/down enabled to avoid floating inputs
@@ -88,6 +102,8 @@ void init_gpio(void)
     P8->REN |= 0xFF;
     P9->REN |= 0xFF;
     P10->REN |= 0xFF;
+
+    init_outputs();
 }
 
 void update_display(Input *input)
@@ -128,7 +144,7 @@ void init_adc(void)
  *
  * Triggers the ADC to start a conversion
  */
-void init_periodic_timer(void)
+void init_periodic_timers(void)
 {
     // Configure TimA1 to SMCLOCK (12 MHz using 48MHz system clock), divide by 8,  UP mode, Interrupt Enable
     TIMER_A1->CTL |= TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC__UP
@@ -136,6 +152,12 @@ void init_periodic_timer(void)
     TIMER_A1->EX0 |= TIMER_A_EX0_IDEX__8; // divide by 8 again, giving a timer freq of 187.5KHz
     TIMER_A1->CCR[0] = TEN_HZ_PSC;  // set frequency as 10 Hz
     NVIC->ISER[0] |= BITB;  // enable TA1_N interrupt
+
+    // Configure TimA0 to SMCLOCK (12 MHz using 48MHz system clock), divide by 8,  UP mode, Interrupt Enable
+    TIMER_A0->CTL |= TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC__UP | TIMER_A_CTL_IE | TIMER_A_CTL_CLR;
+    TIMER_A0->EX0 |= TIMER_A_EX0_IDEX__8; // divide by 8 again, giving a timer freq of 187.5KHz
+    TIMER_A0->CCR[0] = 0;             // set frequency as 10 Hz
+    NVIC->ISER[0] |= BIT9;                // enable TA1_N interrupt
 }
 
 /**
@@ -150,7 +172,9 @@ void ADC14_IRQHandler(void)
     uint32_t adc_voltage = adc_reading * (3300.0 / TWELVE_BIT_ADC_RANGE);
     float temp_c = (adc_voltage - 500) / 10.0; // 10mV/C and 500mV offset
     temp.val = temp_c * 9.0 / 5.0 + 32;
-    temp.changed = true;
+    // temp.changed = true;
+    P4->OUT |= BIT5; // indicate temp reading is available
+    TIMER_A0->CCR[0] = SHORT; // start timer for short period indicating temp ready
 }
 
 /**
@@ -165,15 +189,26 @@ void TA1_N_IRQHandler(void)
 	ADC14->CTL0 |= ADC14_CTL0_SC; // start a new ADC conversion
 }
 
+/**
+ * @brief Timer for result ready
+ */
+void TA0_N_IRQHandler(void)
+{
+    uint16_t dummy = TIMER_A0->IV; // clear flag
+    P4->OUT &= ~BIT5; // end indication
+    TIMER_A0->CCR[0] = 0;
+}
+
 void main(void)
 
 {
 	WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;		// stop watchdog timer
+    // Clock_Init_48MHz(); // run system at 48MHz (default is 3MHz)
 
     // setup
 	init_gpio();
 	init_adc();
-    init_periodic_timer();
+    init_periodic_timers();
     // init_lcd();
 
     __enable_interrupts(); // global interrupt enable
@@ -183,5 +218,6 @@ void main(void)
         // __disable_interrupts(); // entering critical section
         // update_display(&temp);
         // __enable_interrupts(); // leaving critical section
-	}
+        __sleep();
+    }
 }
