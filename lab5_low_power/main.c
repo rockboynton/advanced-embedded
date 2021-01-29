@@ -70,17 +70,6 @@ void init_lcd(void)
 }
 
 /**
- * @brief Initialize input pins
- *
- * Temp Sensor - // TODO
- *
- */
-void init_inputs(void)
-{
-   // TODO
-}
-
-/**
  * @brief Initialize GPIOs
  *
  * Set unused pins to pullup/down enabled to avoid floating inputs
@@ -99,8 +88,6 @@ void init_gpio(void)
     P8->REN |= 0xFF;
     P9->REN |= 0xFF;
     P10->REN |= 0xFF;
-
-    init_inputs();
 }
 
 void update_display(Input *input)
@@ -160,13 +147,9 @@ void init_periodic_timer(void)
 void ADC14_IRQHandler(void)
 {
     uint32_t adc_reading = ADC14->MEM[4];
-    printf("reading (0-4096): %d\t", adc_reading);
     uint32_t adc_voltage = adc_reading * (3300.0 / TWELVE_BIT_ADC_RANGE);
-    printf("voltage (v): %d\t", adc_voltage);
     float temp_c = (adc_voltage - 500) / 10.0; // 10mV/C and 500mV offset
-    printf("temp (c): %f\t", temp_c);
     temp.val = temp_c * 9.0 / 5.0 + 32;
-    printf("temp (f): %f\n", temp.val);
     temp.changed = true;
 }
 
@@ -186,22 +169,19 @@ void main(void)
 
 {
 	WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;		// stop watchdog timer
-    // Clock_Init_48MHz(); // run system at 48MHz (default is 3MHz)
 
     // setup
 	init_gpio();
 	init_adc();
     init_periodic_timer();
-    init_lcd();
+    // init_lcd();
 
     __enable_interrupts(); // global interrupt enable
 
     while (1)
 	{
-        __disable_interrupts(); // entering critical section
-
-        update_display(&temp);
-
-        __enable_interrupts(); // leaving critical section
+        // __disable_interrupts(); // entering critical section
+        // update_display(&temp);
+        // __enable_interrupts(); // leaving critical section
 	}
 }
