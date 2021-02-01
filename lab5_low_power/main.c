@@ -6,7 +6,7 @@ Rock Boynton
 EE4930 Lab 5 - Low Power
 
 Description:
-    // TODO
+    Low Power eagle's nest temperature monitor
 
 *********   Analog Devices TMP36 temperature sensor   ***********************
 Signal    (TMP36)      LaunchPad pin
@@ -119,7 +119,7 @@ void init_wdt()
 {
     //Configure WDT_A
     WDT_A->CTL = WDT_A_CTL_PW // use password
-            | WDT_A_CTL_SSEL__VLOCLK // use VLOCLK
+            | WDT_A_CTL_SSEL__BCLK // use BCLK
             | WDT_A_CTL_TMSEL // interval timer mode
             | WDT_A_CTL_CNTCL // clear the count
             | WDT_A_CTL_IS_5; // ~250 ms initial interval
@@ -129,19 +129,16 @@ void init_wdt()
 void init_cs()
 {
     CS->KEY = CS_KEY_VAL;     //unlock
-    CS->CLKEN |= CS_CLKEN_VLO_EN;      // turn VLOCLK on;
-    CS->CTL1 &= ~(CS_CTL1_SELM_MASK | CS_CTL1_SELM_MASK); // clear SM/HSMCLK, and MCLK sources
-    CS->CTL1 |= CS_CTL1_SELM__VLOCLK | CS_CTL1_SELS__VLOCLK;    // set SMCLK/HSMCLK, MCLK to VLOCLK
+    CS->CLKEN |= CS_CLKEN_REFO_EN; // turn refo clk on
+    CS->CTL1 |= CS_CTL1_SELB; // source REFOCLK for BCLK
     CS->KEY = 0;              // lock
 }
 
-// followed similar format of Clock_init_48MHz()
-int init_pcm()
+void init_pcm()
 {
     PCM->CTL0 = PCM_CTL0_KEY_VAL | PCM_CTL0_LPMR__LPM3 | PCM_CTL0_AMR__AM_LF_VCORE0; // unlock PCM/PMR, request LMP3, LP_AM_LDO_VCORE0
-    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk   // Set Sleep Deep bit
-                | SCB_SCR_SLEEPONEXIT_Msk; // Set Sleep On Exit
-    return 0;
+//    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;   // Set Sleep Deep bit
+    SCB->SCR &= ~SCB_SCR_SLEEPONEXIT_Msk; // disable wake from interrupt
 }
 
 /**
@@ -179,31 +176,12 @@ void ADC14_IRQHandler(void)
     temp.val = temp_c * 9.0f / 5.0f + 32;
     temp.changed = true;
     P4->OUT |= BIT5;          // indicate temp reading is available
-    ADC14->CTL0 &= ~(ADC14_CTL0_ON | ADC14_CTL0_ENC); // turn off ADC
-    WDT_A->CTL = WDT_A_CTL_PW // use password
-                 | WDT_A_CTL_CNTCL        // clear the count
-                 | WDT_A_CTL_IS_5;        // ~250ms mins interval to indicate ready
-    __deep_sleep();
 }
 
 // Interrupt Handler for the watchdog timer
 void WDT_A_IRQHandler(void)
 {
-    if (temp.changed)
-    {
-        P4->OUT &= ~BIT5;            // end indication
-        temp.changed = false;
-        WDT_A->CTL = WDT_A_CTL_PW      // use password
-                   | WDT_A_CTL_CNTCL // clear the count
-                   | WDT_A_CTL_IS_2; // change to ~4 mins intervals
-        __deep_sleep();
-    }
-    else
-    {
-        init_adc();
-        ADC14->CTL0 |= ADC14_CTL0_SC; // start a new ADC conversion
-        __sleep();
-    }
+    // wakes up from LPM3 into LPM0
 }
 
 void main(void)
@@ -215,23 +193,42 @@ void main(void)
     init_gpio();
     Set_ports_to_out();
     init_cs();
-    init_wdt();
-    int code;
-    if ((code = init_pcm()) != 0)
-    {
-       printf("Error code %d\n", code);
-       return;
-    }
+    init_pcm();
     init_adc();
+    init_wdt();
     // init_lcd();
 
     __enable_interrupts(); // global interrupt enable
-    __deep_sleep();
 
     while (1)
     {
         // __disable_interrupts(); // entering critical section
         // update_display(&temp);
         // __enable_interrupts(); // leaving critical section
+        if (temp.changed)
+        {
+            P4->OUT &= ~BIT5;            // end indication
+            temp.changed = false;
+            // ADC14->CTL0 &= ~(ADC14_CTL0_ON | ADC14_CTL0_ENC); // turn off ADC
+            WDT_A->CTL = WDT_A_CTL_PW // use password
+                        | WDT_A_CTL_SSEL__BCLK // use BCLK
+                        | WDT_A_CTL_TMSEL // interval timer mode
+                        | WDT_A_CTL_CNTCL // clear the count
+                        | WDT_A_CTL_IS_2; // ~5 min interval
+            __deep_sleep(); // wait in LPM3 for watchdog - next temp reading
+        }
+        else
+        {
+            // init_adc(); // turn adc back on
+            ADC14->CTL0 |= ADC14_CTL0_SC; // start a new ADC conversion
+            __sleep(); // wait for adc
+            // ADC14->CTL0 &= ~(ADC14_CTL0_ON | ADC14_CTL0_ENC); // turn off ADC
+            WDT_A->CTL = WDT_A_CTL_PW // use password
+                        | WDT_A_CTL_SSEL__BCLK // use BCLK
+                        | WDT_A_CTL_TMSEL // interval timer mode
+                        | WDT_A_CTL_CNTCL // clear the count
+                        | WDT_A_CTL_IS_5; // ~250 ms initial interval
+            __deep_sleep(); // wait in LPM3 for watchdog - result ready indicator
+        }
     }
 }
