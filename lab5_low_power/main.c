@@ -41,32 +41,8 @@ back light    (LED, pin 8) not connected
 // Defines
 #define TWELVE_BIT_ADC_RANGE 4096
 
-typedef struct Input
-{
-    float val;
-    const uint8_t lcd_x;
-    const uint8_t lcd_y;
-    bool changed;
-} Input;
-
-volatile Input temp = {0, 8, 0, false};
-volatile bool invalid = false;
-
-/**
- * @brief Initialize the LCD
- *
- * Sets it up to display temp
- *
- */
-//void init_lcd(void)
-//{
-//    LCD_Config();
-//    LCD_clear();
-//    LCD_home();
-//    LCD_contrast(10);
-//
-//    LCD_print_str("Temp:");
-//}
+volatile float temp = 0;
+volatile bool result_ready = false;
 
 /**
  * @brief Initialize input pins
@@ -79,9 +55,6 @@ void init_outputs(void)
     // pin P4.5
     P4->DIR |= BIT5;  // configure as output
     P4->OUT &= ~BIT5; // set output low to start
-
-    P5->DIR |= BIT7;  // configure as output
-    P5->OUT &= ~BIT7; // set output low to start
 }
 
 /**
@@ -107,18 +80,6 @@ void init_gpio(void)
     init_outputs();
 }
 
-//void update_display(Input *input)
-//{
-//    static char val_str[16];
-//    if (input->changed)
-//    {
-//        LCD_goto_xy(input->lcd_x, input->lcd_y);
-//        sprintf(val_str, "%.1f", input->val);
-//        LCD_print_str(val_str);
-//        input->changed = false;
-//    }
-//}
-
 void init_wdt()
 {
     //Configure WDT_A
@@ -142,8 +103,9 @@ void init_cs()
 
 void init_pcm()
 {
-    PCM->CTL0 = PCM_CTL0_KEY_VAL | PCM_CTL0_LPMR__LPM3 | PCM_CTL0_AMR__AM_LF_VCORE0; // unlock PCM/PMR, request LMP3, LP_AM_LDO_VCORE0
-//    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;   // Set Sleep Deep bit
+    PCM->CTL0 = PCM_CTL0_KEY_VAL // unlock PCM/PMR
+                | PCM_CTL0_LPMR__LPM3 // request LMP3
+                | PCM_CTL0_AMR__AM_LF_VCORE0; // LP_AM_LDO_VCORE0
     SCB->SCR &= ~SCB_SCR_SLEEPONEXIT_Msk; // disable wake from interrupt
 }
 
@@ -179,8 +141,8 @@ void ADC14_IRQHandler(void)
     uint32_t adc_reading = ADC14->MEM[4];
     uint32_t adc_voltage = adc_reading * (3300.0f / TWELVE_BIT_ADC_RANGE);
     float temp_c = (adc_voltage - 500) / 10.0f; // 10mV/C and 500mV offset
-    temp.val = temp_c * 9.0f / 5.0f + 32;
-    temp.changed = true;
+    temp = temp_c * 9.0f / 5.0f + 32;
+    result_ready = true;
     P4->OUT |= BIT5;          // indicate temp reading is available
 }
 
@@ -188,9 +150,6 @@ void ADC14_IRQHandler(void)
 void WDT_A_IRQHandler(void)
 {
     // wakes up from LPM3 into LPM0
-//    printf("in wdt irq\n");
-    if (PCM->IFG & PCM_IFG_LPM_INVALID_TR_IFG != 0)
-        invalid = true;
 }
 
 void main(void)
@@ -205,20 +164,15 @@ void main(void)
     init_cs();
     init_adc();
     init_wdt();
-    // init_lcd();
 
     __enable_interrupts(); // global interrupt enable
 
     while (1)
     {
-        // __disable_interrupts(); // entering critical section
-        // update_display(&temp);
-        // __enable_interrupts(); // leaving critical section
-        if (temp.changed)
+        if (result_ready)
         {
             P4->OUT &= ~BIT5;            // end indication
-            temp.changed = false;
-            // ADC14->CTL0 &= ~(ADC14_CTL0_ON | ADC14_CTL0_ENC); // turn off ADC
+            result_ready = false;
             WDT_A->CTL = WDT_A_CTL_PW // use password
                         | WDT_A_CTL_SSEL__BCLK // use BCLK
                         | WDT_A_CTL_TMSEL // interval timer mode
@@ -228,10 +182,8 @@ void main(void)
         }
         else
         {
-            // init_adc(); // turn adc back on
             ADC14->CTL0 |= ADC14_CTL0_SC; // start a new ADC conversion
             __sleep(); // wait for adc
-            // ADC14->CTL0 &= ~(ADC14_CTL0_ON | ADC14_CTL0_ENC); // turn off ADC
             WDT_A->CTL = WDT_A_CTL_PW // use password
                         | WDT_A_CTL_SSEL__BCLK // use BCLK
                         | WDT_A_CTL_TMSEL // interval timer mode
