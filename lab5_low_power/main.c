@@ -50,6 +50,7 @@ typedef struct Input
 } Input;
 
 volatile Input temp = {0, 8, 0, false};
+volatile bool invalid = false;
 
 /**
  * @brief Initialize the LCD
@@ -78,6 +79,9 @@ void init_outputs(void)
     // pin P4.5
     P4->DIR |= BIT5;  // configure as output
     P4->OUT &= ~BIT5; // set output low to start
+
+    P5->DIR |= BIT7;  // configure as output
+    P5->OUT &= ~BIT7; // set output low to start
 }
 
 /**
@@ -122,8 +126,8 @@ void init_wdt()
             | WDT_A_CTL_SSEL__BCLK // use BCLK
             | WDT_A_CTL_TMSEL // interval timer mode
             | WDT_A_CTL_CNTCL // clear the count
-            | WDT_A_CTL_IS_5; // ~250 ms initial interval
-    NVIC->ISER[0] |= WDT_A_IRQn;
+            | WDT_A_CTL_IS_6; // ~2 ms initial interval
+    NVIC->ISER[0] |= 1 << WDT_A_IRQn;
 }
 
 void init_cs()
@@ -131,6 +135,8 @@ void init_cs()
     CS->KEY = CS_KEY_VAL;     //unlock
     CS->CLKEN |= CS_CLKEN_REFO_EN; // turn refo clk on
     CS->CTL1 |= CS_CTL1_SELB; // source REFOCLK for BCLK
+    CS->CTL1 &= CS_CTL1_SELS_MASK; // clear SELM
+    CS->CTL1 |= CS_CTL1_SELS__REFOCLK; // source REFOCLK for SMCLK
     CS->KEY = 0;              // lock
 }
 
@@ -149,7 +155,7 @@ void init_pcm()
 void init_adc(void)
 {
     // Sampling time, S&H=96, ADC14 on, SMCLK, single input, single conv.
-    ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_SHP | ADC14_CTL0_SSEL_4 | ADC14_CTL0_ON;
+    ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_SHP | ADC14_CTL0_SSEL__SMCLK | ADC14_CTL0_ON;
     ADC14->CTL1 &= ~(ADC14_CTL1_RES_2 | ADC14_CTL1_RES_1);     // clear res bits
     ADC14->CTL1 |= ADC14_CTL1_RES__12BIT | ADC14_CTL1_PWRMD_2; // set 12 bit resolution, low power
     ADC14->CTL1 |= (4 << ADC14_CTL1_CSTARTADD_OFS);            // use MEM[4]
@@ -182,6 +188,9 @@ void ADC14_IRQHandler(void)
 void WDT_A_IRQHandler(void)
 {
     // wakes up from LPM3 into LPM0
+//    printf("in wdt irq\n");
+    if (PCM->IFG & PCM_IFG_LPM_INVALID_TR_IFG != 0)
+        invalid = true;
 }
 
 void main(void)
@@ -190,10 +199,10 @@ void main(void)
     WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;   // Stop watchdog timer
 
     // setup
+    init_pcm();
     init_gpio();
     Set_ports_to_out();
     init_cs();
-    init_pcm();
     init_adc();
     init_wdt();
     // init_lcd();
@@ -227,7 +236,7 @@ void main(void)
                         | WDT_A_CTL_SSEL__BCLK // use BCLK
                         | WDT_A_CTL_TMSEL // interval timer mode
                         | WDT_A_CTL_CNTCL // clear the count
-                        | WDT_A_CTL_IS_5; // ~250 ms initial interval
+                        | WDT_A_CTL_IS_6; // ~2 ms interval
             __deep_sleep(); // wait in LPM3 for watchdog - result ready indicator
         }
     }
