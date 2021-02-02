@@ -30,8 +30,21 @@ Specifications:
 ## Conclusion
 
 This was a very challenging lab. Getting the main functionality of the system wasn't too difficult,
-though. I originally implemented it using two timers, TimerA0 and TimerA1. TimerA0 was used to
-periodically kick off the
+though, I just had a small snag when setting up the Watchdog timer interrupt in the NVIC. I began
+my work on this by testing I originally implemented it using two timers, TimerA0 and TimerA1. TimerA0 was used to
+periodically kick off the A/D conversion and TimerA1 was used to set the result ready indicator pin
+high for a brief period. I was able to translate that solution into a low power one eventually by
+using the watchdog timer in two different intervals depending on whether the result was ready or if
+it was waiting on a new result. I chose just using the WDT because it is available in LPM3 and
+seemed relatively simple to get working over the RTC. It would be interesting to try LPM3.5 but
+perhaps another time as there was a few more steps involved.
+
+Where I had the biggest problems, though was the fact that I was not getting more than ~10 days of
+battery life even when verifying that I was going into LPM3. It turns out, just having other small
+components e.g. LCD wiring, potentiometers, and LEDs caused a **significant** current draw and when
+I removed those, my battery life shot up to **~8 months**, plenty more than the 70 days required. It felt very good to finally get it working.
+I wasn't able to see scope data, but from what I have read up on TI forums, Energy Trace is more
+accurate.
 
 ## Source Code
 
