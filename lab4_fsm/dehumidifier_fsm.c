@@ -41,8 +41,7 @@ void no_op(void)
 state_element state_table[NUM_STATES][NUM_EVENTS] = {
     {{NORMAL_OPERATION, operate_normally}, {OFF, no_op}, {DEFROST, defrost_coils}, {OFF, no_op}},
     {{NORMAL_OPERATION, no_op}, {OFF, turn_off}, {DEFROST, defrost_coils}, {NORMAL_OPERATION, no_op}},
-    {{DEFROST, no_op}, {DEFROST, no_op}, {DEFROST, no_op}, {OFF, turn_off}}
-};
+    {{NORMAL_OPERATION, operate_normally}, {OFF, turn_off}, {DEFROST, no_op}, {OFF, turn_off}}};
 
 State update_state(State current_state, Event input)
 {

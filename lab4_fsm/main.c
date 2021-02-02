@@ -268,7 +268,7 @@ void main(void)
 
     while (1)
 	{
-        __disable_interrupts(); // entering critical section
+       __disable_interrupts(); // entering critical section
 
         update_display(&temp);
         update_display(&humidity);
@@ -289,6 +289,6 @@ void main(void)
 
 		current_state = update_state(current_state, input_event);
 
-        __enable_interrupts(); // leaving critical section
+       __enable_interrupts(); // leaving critical section
 	}
 }
