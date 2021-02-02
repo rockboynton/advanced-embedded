@@ -54,11 +54,6 @@ void defrost_coils(void);
  */
 void no_op(void);
 
-//void __no_operation();
-
-// state table array
-extern state_element state_table[NUM_STATES][NUM_EVENTS];
-
 /**
  * @brief Run the appropriate state's action and return the next state
  *

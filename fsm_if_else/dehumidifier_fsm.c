@@ -37,19 +37,80 @@ void no_op(void)
     __no_operation();
 }
 
-// create state table array
-state_element state_table[NUM_STATES][NUM_EVENTS] = {
-    {{NORMAL_OPERATION, operate_normally}, {OFF, no_op}, {DEFROST, defrost_coils}, {OFF, no_op}},
-    {{NORMAL_OPERATION, no_op}, {OFF, turn_off}, {DEFROST, defrost_coils}, {NORMAL_OPERATION, no_op}},
-    {{NORMAL_OPERATION, operate_normally}, {OFF, turn_off}, {DEFROST, no_op}, {OFF, turn_off}}};
-
 State update_state(State current_state, Event input)
 {
-    state_element current = state_table[current_state][input];
+    State next_state;
 
-    // run the proper action function
-    (*current.action)();
+    if (current_state == OFF)
+    {
+        if (input == HUMIDITY_RISE)
+        {
+            next_state = NORMAL_OPERATION;
+            operate_normally();
+        }
+        else if (input == HUMIDITY_FALL)
+        {
+            next_state = OFF;
+            no_op();
+        }
+        else if (input == ICE_SENSED)
+        {
+            next_state = DEFROST;
+            defrost_coils();
+        }
+        else if (input == IDLE)
+        {
+            next_state = OFF;
+            no_op();
+        }
+    }
+    else if (current_state == NORMAL_OPERATION)
+    {
+        if (input == HUMIDITY_RISE)
+        {
+            next_state = NORMAL_OPERATION;
+            no_op();
+        }
+        else if (input == HUMIDITY_FALL)
+        {
+            next_state = OFF;
+            turn_off();
+        }
+        else if (input == ICE_SENSED)
+        {
+            next_state = DEFROST;
+            defrost_coils();
+        }
+        else if (input == IDLE)
+        {
+            next_state = NORMAL_OPERATION;
+            no_op();
+        }
+    }
+    else if (current_state == DEFROST)
+    {
+        if (input == HUMIDITY_RISE)
+        {
+            next_state = NORMAL_OPERATION;
+            operate_normally();
+        }
+        else if (input == HUMIDITY_FALL)
+        {
+            next_state = OFF;
+            turn_off();
+        }
+        else if (input == ICE_SENSED)
+        {
+            next_state = DEFROST;
+            no_op();
+        }
+        else if (input == IDLE)
+        {
+            next_state = OFF;
+            turn_off();
+        }
+    }
 
     // return next state info
-    return current.next_state;
+    return next_state;
 }
