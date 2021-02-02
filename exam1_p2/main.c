@@ -46,7 +46,7 @@ void main(void)
     y = 62;
     // z = (y + 3) * 4 - (x + 12); // 246
     // x = y + z; // 308
-    // let k = 33 * x = 10164, pulling out calculation from loop so only performing once
+    // let k = 33 * x = 10164, pulling out calculation from loop
     k = 10164;
     for (i = 0; i < 100; i += 10) // partially unroll large loop...could unroll further
     {
