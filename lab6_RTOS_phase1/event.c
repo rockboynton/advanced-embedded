@@ -30,6 +30,8 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define __MSP432P401R__
+
 /*
  *  ======== event.c ========
  */
