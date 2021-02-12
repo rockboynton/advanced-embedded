@@ -7,7 +7,7 @@
 // Reference the line numbers of the code you change in each section of your solution
 // Include comments to indicate what you did and how it improves execution speed
 //
-// Modified by
+// Modified by Rock Boynton
 //****************************************************************************
 #include "msp.h"
 
