@@ -87,6 +87,11 @@ back light    (LED, pin 8) not connected
 #include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/knl/Event.h>
 
+/* TI Drivers */
+#include <ti/drivers/GPIO.h>
+#include <ti/drivers/I2C.h>
+#include <ti/drivers/PWM.h>
+#include "ti_drivers_config.h"
 #include <ti/drivers/Board.h>
 
 #define CLOCK_PERIOD 10 // number of clock ticks per adc trigger \

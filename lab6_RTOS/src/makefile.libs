@@ -1,6 +1,6 @@
 #
 # This file was generated based on the configuration script:
-#     C:\Users\goali\code\adv-embedded-repos\lab7_igloo_controller\event.cfg
+#     C:\Users\goali\code\adv-embedded-repos\lab6_RTOS\event.cfg
 #
 # This makefile may be included in other makefiles that need to build
 # the libraries containing the compiled source files generated as
@@ -14,7 +14,7 @@
 #
 # The absolute path to the generated source directory (at the time the
 # sources were generated) is:
-#    C:\Users\goali\code\adv-embedded-repos\lab7_igloo_controller\src
+#    C:\Users\goali\code\adv-embedded-repos\lab6_RTOS\src
 #
 GEN_SRC_DIR ?= ../src
 
