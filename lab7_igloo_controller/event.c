@@ -91,6 +91,7 @@ back light    (LED, pin 8) not connected
 
 /* TI Drivers */
 #include <ti/drivers/I2C.h>
+#include <ti/drivers/PWM.h>
 
 #define CLOCK_PERIOD 10 // number of clock ticks per adc trigger \
                       // period of ~10 ms
@@ -99,8 +100,8 @@ back light    (LED, pin 8) not connected
 #define ADC_INTERRUPT 40 // interrupt number for the ADC
 #define ADC_RANGE 256  // for 8 bit conversions
 
-Task_Struct check_for_input_task_struct, update_lcd_task_struct, get_temp_i2c_task_struct;
-Char check_for_input_task_stack[TASK_STACK_SIZE], update_lcd_task_stack[TASK_STACK_SIZE], get_temp_i2c_task_stack[TASK_STACK_SIZE];
+Task_Struct check_for_input_task_struct, update_lcd_task_struct, get_temp_i2c_task_struct, heater_task_struct;
+Char check_for_input_task_stack[TASK_STACK_SIZE], update_lcd_task_stack[TASK_STACK_SIZE], get_temp_i2c_task_stack[TASK_STACK_SIZE], heater_task_stack[TASK_STACK_SIZE];
 
 Clock_Struct clock_struct;
 Clock_Handle clock_handle;
@@ -116,6 +117,7 @@ Hwi_Handle adc_hwi_handle;
 
 uint8_t setpoint = 0;
 uint16_t temperature = 0;
+Bool heating = false;
 
 /**
  * @brief Initialize the LCD
@@ -134,8 +136,6 @@ void init_lcd(void)
     LCD_goto_xy(0, 1);
     LCD_print_str("Temp:  xx F");
     LCD_goto_xy(0, 2);
-    LCD_print_str("Temp:  OFF");
-    LCD_goto_xy(0, 3);
     LCD_print_str("Heat:  OFF");
 }
 
@@ -212,6 +212,78 @@ Void get_temp_i2c()
     BIOS_exit(0);
 }
 
+Void heater()
+{
+    UInt posted;
+
+    //setup pwm
+    PWM_Handle pwm;
+    PWM_Params pwmParams;
+    uint32_t dutyValue;
+    // Initialize the PWM parameters
+    PWM_Params_init(&pwmParams);
+    pwmParams.idleLevel = PWM_IDLE_LOW;      // Output low when PWM is not running
+    pwmParams.periodUnits = PWM_PERIOD_HZ;   // Period is in Hz
+    pwmParams.periodValue = 13;              // 1MHz
+    pwmParams.dutyUnits = PWM_DUTY_FRACTION; // Duty is in fractional percentage
+    pwmParams.dutyValue = 0;                 // 0% initial duty cycle
+    // Open the PWM instance
+    pwm = PWM_open(0, &pwmParams);
+    if (pwm == NULL)
+    {
+        // PWM_open() failed
+        while (1)
+            ;
+    }
+    dutyValue = (uint32_t)(((uint64_t)PWM_DUTY_FRACTION_MAX * 50) / 100);
+    PWM_setDuty(pwm, dutyValue); // set duty cycle to 40%
+
+    while (1)
+    {
+        //update output the same time the adc conversion finishes.
+        posted = Event_pend(reading_available_event_handle,
+                            Event_Id_00,
+                            Event_Id_NONE,
+                            BIOS_WAIT_FOREVER);
+
+        if (posted == 0)
+        {
+            System_printf("Timeout expired for Event_pend()\n");
+            break;
+        }
+        if (posted & Event_Id_00)
+        {
+            if ((temperature - 1) >= setpoint)
+            {
+                //turn off
+                P2->OUT &= ~(BIT4 | BIT6);
+                PWM_stop(pwm);
+                heating = false;
+            }
+            else if ((temperature + 1) <= setpoint)
+            {
+                //turn on
+                P2->OUT |= BIT6;
+                PWM_start(pwm);
+                heating = true;
+            }
+        }
+    }
+
+    BIOS_exit(0); //should never get here
+}
+
+init_gpio()
+{
+    // pin P2.4 -- fan
+    P2->DIR |= BIT4;  // configure as output
+    P2->OUT &= ~BIT4; // set output low to start
+
+    // pin P2.6 -- heater
+    P2->DIR |= BIT6;  // configure as output
+    P2->OUT &= ~BIT6; // set output low to start
+}
+
 /*
  * Pends on an LCD update event to update the LCD with a new setpoint temperature
  */
@@ -238,6 +310,8 @@ Void update_lcd()
             LCD_print_udec3(setpoint);
             LCD_goto_xy(6, 1);
             LCD_print_udec3(temperature);
+            LCD_goto_xy(7, 2);
+            LCD_print_str(heating ? "ON " : "OFF");
         }
     }
 }
@@ -314,6 +388,7 @@ int main()
     init_lcd();
     Hwi_enable();
     init_adc();
+    init_gpio();
 
     /* Construct BIOS Objects */
     Task_Params task_params;
@@ -324,6 +399,7 @@ int main()
     /* Call driver init functions */
     Board_init();
     I2C_init();
+    PWM_init();
 
     /* Construct Task threads */
     Task_Params_init(&task_params);
@@ -334,7 +410,7 @@ int main()
     task_params.stack = &check_for_input_task_stack;
     Task_construct(&check_for_input_task_struct, (Task_FuncPtr)check_for_input, &task_params, NULL);
 
-    // lcd update is least important
+    // lcd update is not super important
     task_params.priority = 5;
     task_params.stack = &update_lcd_task_stack;
     Task_construct(&update_lcd_task_struct, (Task_FuncPtr)update_lcd, &task_params, NULL);
@@ -343,6 +419,11 @@ int main()
     task_params.priority = 3;
     task_params.stack = &get_temp_i2c_task_stack;
     Task_construct(&get_temp_i2c_task_struct, (Task_FuncPtr)get_temp_i2c, &task_params, NULL);
+
+    // setting heater is least important
+    task_params.priority = 6;
+    task_params.stack = &heater_task_stack;
+    Task_construct(&heater_task_struct, (Task_FuncPtr)heater, &task_params, NULL);
 
     /* Obtain event handlers */
     Event_construct(&reading_available_event_struct, NULL);
