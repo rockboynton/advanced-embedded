@@ -32,15 +32,14 @@
 
 /*
  *  ======== event.c ========
-MSP432 main.c
+MSP432 event.c
 
 Rock Boynton
-02/11/2021
-EE4930 Lab 1
+02/23/2021
+EE4930 Final
 
 Description:
-    Reads from a potentiometer with an ADC. ADC reading is
-    periodically taken using a TI RTOS clock.
+    Controller for an igloo. Provides heating and fan control.
 
 *********   Bourns 3352T-1-103LF-10K potentiometer reference   ***************
 Signal (Bourns 3352T)  LaunchPad pin
@@ -222,18 +221,17 @@ Void heater()
     uint32_t dutyValue;
     // Initialize the PWM parameters
     PWM_Params_init(&pwmParams);
-    pwmParams.idleLevel = PWM_IDLE_LOW;      // Output low when PWM is not running
-    pwmParams.periodUnits = PWM_PERIOD_HZ;   // Period is in Hz
+    pwmParams.idleLevel = PWM_IDLE_LOW;
+    pwmParams.periodUnits = PWM_PERIOD_HZ;
     pwmParams.periodValue = 13;              // 1MHz
-    pwmParams.dutyUnits = PWM_DUTY_FRACTION; // Duty is in fractional percentage
+    pwmParams.dutyUnits = PWM_DUTY_FRACTION; // fractional percentage
     pwmParams.dutyValue = 0;                 // 0% initial duty cycle
-    // Open the PWM instance
+    // get PWM instance
     pwm = PWM_open(0, &pwmParams);
     if (pwm == NULL)
     {
         // PWM_open() failed
-        while (1)
-            ;
+        while (1){}
     }
     dutyValue = (uint32_t)(((uint64_t)PWM_DUTY_FRACTION_MAX * 50) / 100);
     PWM_setDuty(pwm, dutyValue); // set duty cycle to 40%
@@ -255,14 +253,14 @@ Void heater()
         {
             if ((temperature - 1) >= setpoint)
             {
-                //turn off
+                //turn heater off
                 P2->OUT &= ~(BIT4 | BIT6);
                 PWM_stop(pwm);
                 heating = false;
             }
             else if ((temperature + 1) <= setpoint)
             {
-                //turn on
+                //turn heater on
                 P2->OUT |= BIT6;
                 PWM_start(pwm);
                 heating = true;
