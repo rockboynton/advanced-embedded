@@ -87,22 +87,20 @@ back light    (LED, pin 8) not connected
 #include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/knl/Event.h>
 
-/* TI Drivers */
-#include <ti/drivers/GPIO.h>
-#include <ti/drivers/I2C.h>
-#include <ti/drivers/PWM.h>
-#include "ti_drivers_config.h"
 #include <ti/drivers/Board.h>
+
+/* TI Drivers */
+#include <ti/drivers/I2C.h>
 
 #define CLOCK_PERIOD 10 // number of clock ticks per adc trigger \
                       // period of ~10 ms
 
-#define TASK_STACK_SIZE 512
+#define TASK_STACK_SIZE 1024
 #define ADC_INTERRUPT 40 // interrupt number for the ADC
 #define ADC_RANGE 256  // for 8 bit conversions
 
-Task_Struct check_for_input_task_struct, update_lcd_task_struct;
-Char check_for_input_task_stack[TASK_STACK_SIZE], update_lcd_task_stack[TASK_STACK_SIZE];
+Task_Struct check_for_input_task_struct, update_lcd_task_struct, get_temp_i2c_task_struct;
+Char check_for_input_task_stack[TASK_STACK_SIZE], update_lcd_task_stack[TASK_STACK_SIZE], get_temp_i2c_task_stack[TASK_STACK_SIZE];
 
 Clock_Struct clock_struct;
 Clock_Handle clock_handle;
@@ -116,12 +114,13 @@ Swi_Handle adc_swi_handle;
 Hwi_Struct adc_hwi_struct;
 Hwi_Handle adc_hwi_handle;
 
-uint8_t temperature = 0;
+uint8_t setpoint = 0;
+uint16_t temperature = 0;
 
 /**
  * @brief Initialize the LCD
  *
- * Sets it up to display temperature set point
+ * Sets it up to display setpoint set point
  *
  */
 void init_lcd(void)
@@ -131,7 +130,13 @@ void init_lcd(void)
     LCD_home();
     LCD_contrast(10);
 
-    LCD_print_str("Temp: xx F");
+    LCD_print_str("Setpt: xx F");
+    LCD_goto_xy(0, 1);
+    LCD_print_str("Temp:  xx F");
+    LCD_goto_xy(0, 2);
+    LCD_print_str("Temp:  OFF");
+    LCD_goto_xy(0, 3);
+    LCD_print_str("Heat:  OFF");
 }
 
 void init_adc()
@@ -156,8 +161,59 @@ Void start_conversion()
     ADC14->CTL0 |= 1; // start ADC conversions
 }
 
+Void get_temp_i2c()
+{
+    uint16_t tmp_data;
+    uint8_t rxBuffer[2];
+
+    I2C_Params params;
+    I2C_Params_init(&params);
+    params.bitRate = I2C_400kHz;
+
+    I2C_Handle i2cHandle = I2C_open(0, &params);
+    I2C_Transaction transaction;
+    transaction.slaveAddress = 0x48;
+    transaction.readBuf = rxBuffer;
+    transaction.readCount = sizeof(rxBuffer);
+    transaction.writeCount = 0;
+
+    /* Take samples forever */
+    while (1)
+    {
+        //get a new sample the same time the adc conversions finnish. ~0.5 sec
+        UInt posted = Event_pend(reading_available_event_handle,
+                                Event_Id_00,
+                                Event_Id_NONE,
+                                BIOS_WAIT_FOREVER);
+
+        if (posted == 0)
+        {
+            System_printf("Timeout expired for Event_pend()\n");
+            break;
+        }
+
+        // signal to LCD task if the new temperature value is different than whats currently displayed
+        if (posted & Event_Id_00)
+        {
+            if (I2C_transfer(i2cHandle, &transaction))
+            {
+                tmp_data = (rxBuffer[0] << 4) | (rxBuffer[1] >> 4); // combine data result before multiplication
+                temperature = (tmp_data * 0.0625);                      // convert to reading to celsius
+                temperature = ((((float)temperature) * 9) / 5) + 32;    // convert celsius to farenheight
+            }
+            else
+            {
+                System_printf("I2C bus fault.\n");
+            }
+        }
+    }
+
+    I2C_close(i2cHandle);
+    BIOS_exit(0);
+}
+
 /*
- * Pends on an LCD update event to update the LCD with a new temperature reading
+ * Pends on an LCD update event to update the LCD with a new setpoint temperature
  */
 Void update_lcd()
 {
@@ -178,7 +234,9 @@ Void update_lcd()
         // update the LCD if the correct event trigger was posted.
         if (posted & Event_Id_00)
         {
-            LCD_goto_xy(5, 0);
+            LCD_goto_xy(6, 0);
+            LCD_print_udec3(setpoint);
+            LCD_goto_xy(6, 1);
             LCD_print_udec3(temperature);
         }
     }
@@ -191,7 +249,8 @@ Void update_lcd()
 Void check_for_input()
 {
     UInt posted;
-    uint8_t old_temp = 0;
+    uint8_t old_setpt = 0;
+    uint16_t old_temperature = 0;
 
     while (1)
     {
@@ -207,12 +266,17 @@ Void check_for_input()
             break;
         }
 
-        // signal to LCD task if the new temperature value is different than whats currently displayed
+        // signal to LCD task if the new setpoint value or temperature is different than whats currently displayed
         if (posted & Event_Id_00)
         {
-            if (temperature != old_temp)
+            if (setpoint != old_setpt)
             {
-                old_temp = temperature;
+                old_setpt = setpoint;
+                Event_post(lcd_event_handle, Event_Id_00);
+            }
+            else if (temperature != old_temperature)
+            {
+                old_temperature = temperature;
                 Event_post(lcd_event_handle, Event_Id_00);
             }
         }
@@ -223,7 +287,7 @@ Void check_for_input()
 /*
  * Hardware Interrupt handler
  * Called when a new ADC value is ready.
- * Posts to a software interrupt to read ADC and convert to temperature
+ * Posts to a software interrupt to read ADC and convert to setpoint
  */
 Void adc_hwi()
 {
@@ -233,12 +297,12 @@ Void adc_hwi()
 
 /*
  * Software interrupt handler
- * Reads the ADC value and converts it to the temperature range 50 - 90 F
+ * Reads the ADC value and converts it to the setpoint range 50 - 90 F
  * Posts event check_for_input that a new value is available
  */
 Void adc_swi()
 {
-    temperature = (((float)ADC14->MEM[4]) / ADC_RANGE) * (90 - 50 + 1) + 50;
+    setpoint = (((float)ADC14->MEM[4]) / ADC_RANGE) * (90 - 50 + 1) + 50;
     Event_post(reading_available_event_handle, Event_Id_00);
 }
 
@@ -259,20 +323,26 @@ int main()
 
     /* Call driver init functions */
     Board_init();
+    I2C_init();
 
     /* Construct Task threads */
     Task_Params_init(&task_params);
     task_params.stackSize = TASK_STACK_SIZE;
-    // updating the internal temperature is less important than handling the HW interrupts
+    // updating the internal setpoint is less important than handling the HW interrupts
     // but more important than updating the LCD display
-    task_params.priority = 3;
+    task_params.priority = 4;
     task_params.stack = &check_for_input_task_stack;
     Task_construct(&check_for_input_task_struct, (Task_FuncPtr)check_for_input, &task_params, NULL);
 
     // lcd update is least important
-    task_params.priority = 4;
+    task_params.priority = 5;
     task_params.stack = &update_lcd_task_stack;
     Task_construct(&update_lcd_task_struct, (Task_FuncPtr)update_lcd, &task_params, NULL);
+
+    // getting temperature reading is most important
+    task_params.priority = 3;
+    task_params.stack = &get_temp_i2c_task_stack;
+    Task_construct(&get_temp_i2c_task_struct, (Task_FuncPtr)get_temp_i2c, &task_params, NULL);
 
     /* Obtain event handlers */
     Event_construct(&reading_available_event_struct, NULL);
@@ -307,4 +377,3 @@ int main()
     BIOS_start();
     return (0);
 }
-
